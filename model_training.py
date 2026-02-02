@@ -11,9 +11,12 @@ warnings.filterwarnings('ignore')
 
 def elec_training(model, model_name, train_loader, val_loader, test_loader, args, device, exp_id):
     opt = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=0.001)
-    epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
+    try:
+        epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
+    except TypeError:
+        epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, min_lr=0.0001)
 
-    epochs = 350
+    epochs = args.epochs if hasattr(args, 'epochs') and args.epochs is not None else 350
     min_val_loss = 1000000
     loss=nn.MSELoss()
 
@@ -218,9 +221,12 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
 def exchange_training(model, model_name, train_loader, val_loader, test_loader, args, device, exp_id):
     #opt = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=0.001)
     opt = torch.optim.Adam(model.parameters(), lr=0.01)
-    epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
+    try:
+        epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
+    except TypeError:
+        epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, min_lr=0.0001)
 
-    epochs = 300
+    epochs = args.epochs if hasattr(args, 'epochs') and args.epochs is not None else 300
     min_val_loss = 1000000
     loss=nn.MSELoss()
 
@@ -424,10 +430,13 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
 def PM_training(model, model_name, train_loader, val_loader, test_loader, args, device, exp_id):
     #opt = torch.optim.Adam(model.parameters(), lr=0.05, weight_decay=0.03)
     opt = torch.optim.Adam(model.parameters(), lr=0.05,weight_decay=0.03)
-    epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
+    try:
+        epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
+    except TypeError:
+        epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, min_lr=0.0001)
 
     #epoch_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=32)
-    epochs =300
+    epochs = args.epochs if hasattr(args, 'epochs') and args.epochs is not None else 300
     min_val_loss = 1000000
     loss=nn.MSELoss()
 

@@ -17,6 +17,10 @@ parser.add_argument('--N_units', type=int, default=64, help='The hidden size for
 parser.add_argument('--n_units', type=int, default=64, help='The hidden size for Tensor LSTM')
 parser.add_argument('--dataset', type=str, default='electricity')
 parser.add_argument('--save_dirs', type=str, default='results', help='The dirs for saving results')
+parser.add_argument('--data_dir', type=str, default=None, help='Directory containing newX_train.csv and second_y.csv')
+parser.add_argument('--device', type=str, default=None, help='Torch device string, e.g. cpu or cuda:0')
+parser.add_argument('--epochs', type=int, default=350, help='Number of training epochs')
+parser.add_argument('--models', type=str, default=None, help='Comma-separated model names, e.g. Delelstm or Delelstm,LSTM')
 parser.add_argument('--batch_size', type=int, default=64, help='The batch size when training NN')
 parser.add_argument('--num_exp', type=int, default=5, help='The number of experiment')
 parser.add_argument('--log', type=bool, default=True, help='Whether log the information of training process')
@@ -28,12 +32,13 @@ args = parser.parse_args()
 if __name__ == '__main__':
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device(args.device) if args.device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    data_path = r'C:\clean\Explain_time_series\Code\DATA\Processed\elec'
+    data_path = args.data_dir or os.path.join(os.path.dirname(__file__), 'DATA', 'Electricity')
     data = pd.read_csv(os.path.join(data_path, 'newX_train.csv'))
 
     y = pd.read_csv(os.path.join(data_path, 'second_y.csv'))
@@ -46,9 +51,9 @@ if __name__ == '__main__':
                 np.max(data[(col)]) - np.min(data[col]))
 
     train_idx = np.random.choice(data_idx, int(0.75 * N), replace=False)
-    data_idx = data_idx[~np.in1d(data_idx, train_idx)]
+    data_idx = data_idx[~np.isin(data_idx, train_idx)]
     val_idx = np.random.choice(data_idx, int(0.15 * N), replace=False)
-    data_idx = data_idx[~np.in1d(data_idx, val_idx)]
+    data_idx = data_idx[~np.isin(data_idx, val_idx)]
     test_idx = data_idx
 
     train_X = data.loc[data['idx'].isin(train_idx), :]
@@ -85,7 +90,7 @@ if __name__ == '__main__':
         os.makedirs(save_path)
 
     short=0
-    model_list = ['Delelstm', 'IMV_full', 'IMV_tensor', 'Retain', 'LSTM']
+    model_list = [s.strip() for s in args.models.split(',') if s.strip()] if args.models else ['Delelstm', 'IMV_full', 'IMV_tensor', 'Retain', 'LSTM']
     #model_list = ['LSTM']
     # split the training set and test set and construct the data loader
 

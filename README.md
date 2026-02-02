@@ -1,8 +1,10 @@
 # DeLELSTM: Decomposition-based Linear Explainable LSTM to Capture Instantaneous and Long term Effects
 ## Requirements
-Python == 3.9.
+Python 3.9-3.11 recommended.
 
-Pytorch: 2.0.0+cu117, Numpy: 1.23.5, Pandas: 1.5.3, Matplotlib: 3.7.1
+PyTorch should be installed separately (CPU or CUDA build depending on your machine).
+
+Other dependencies are listed in requirements.txt (numpy, pandas, matplotlib, torchmetrics, scikit-learn).
 
 All the codes are run on GPUs by default.
 
@@ -19,7 +21,13 @@ The exchange data can be downloaded from https://github.com/laiguokun/multivaria
 The following commands will train three task-specific datasets. These commands are independent, if you are going to work only on one benchmark task, you can run only the corresponding command.
 
 ```
-python3 Electricity.py --model_name Delelstm
-python3 Exchange.py --model_name Delelstm
-python3 PM.py --model_name Delelstm
+python Electricity.py
+python Exchange.py
+python PM.py
 ```
+
+Optional arguments:
+- --data_dir: directory containing newX_train.csv and second_y.csv (default uses DATA/<dataset> in this repo)
+- --device: torch device string, e.g. cpu or cuda:0 (default auto-select)
+- --epochs: number of training epochs
+- --models: comma-separated model names, e.g. Delelstm or Delelstm,LSTM
