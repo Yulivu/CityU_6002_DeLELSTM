@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import pandas as pd
 import config
-from networks import Delelstm,IMVTensorLSTM_pertime,IMVFullLSTM_pertime,Retain_pertime,normalLSTMpertime
+from networks import Delelstm,IMVTensorLSTM_pertime,IMVFullLSTM_pertime,Retain_pertime,normalLSTMpertime,AttentionDeLELSTM
 from model_training import exchange_training
 import torch
 from torch.utils.data import TensorDataset, DataLoader
@@ -26,6 +26,9 @@ parser.add_argument('--batch_size', type=int, default=128, help='The batch size 
 parser.add_argument('--num_exp', type=int, default=5, help='The number of experiment')
 parser.add_argument('--log', type=bool, default=True, help='Whether log the information of training process')
 parser.add_argument('--save_models', type=bool, default=False, help='Whether save the training models')
+parser.add_argument('--attention_heads', type=int, default=None, help='Override attention heads for AttentionDeLELSTM')
+parser.add_argument('--attention_threshold', type=float, default=None, help='Override attention sparsity threshold for AttentionDeLELSTM')
+parser.add_argument('--ridge_lambda', type=float, default=None, help='Override ridge lambda for InteractionDecomposition')
 
 
 args = parser.parse_args()
@@ -85,14 +88,14 @@ if __name__ == '__main__':
     y_val_t = torch.Tensor(val_Y['target'].to_numpy()).reshape(len(val_idx), args.depth - 2)
     y_test_t = torch.Tensor(test_Y['target'].to_numpy()).reshape(len(test_idx), args.depth - 2)
     train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=args.batch_size, shuffle=True, drop_last=True)
-    val_loader = DataLoader(TensorDataset(X_val_t, y_val_t), batch_size=args.batch_size, shuffle=False, drop_last=True)
-    test_loader = DataLoader(TensorDataset(X_test_t, y_test_t), batch_size=args.batch_size, shuffle=False, drop_last=True)
+    val_loader = DataLoader(TensorDataset(X_val_t, y_val_t), batch_size=args.batch_size, shuffle=False, drop_last=False)
+    test_loader = DataLoader(TensorDataset(X_test_t, y_test_t), batch_size=args.batch_size, shuffle=False, drop_last=False)
 
     save_path = os.path.join(args.save_dirs, 'Exchange')
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    short=0
+    short=int(args.depth * 0.1)
     model_list = [s.strip() for s in args.models.split(',') if s.strip()] if args.models else ['Delelstm', 'Retain','IMV_full', 'IMV_tensor',  'LSTM']
     #model_list=['LSTM']
     # split the training set and test set and construct the data loader
@@ -101,6 +104,8 @@ if __name__ == '__main__':
         for model_name in model_list:
             if model_name == 'Delelstm':
                 model = Delelstm(config.config(model_name, args), short).to(device)
+            elif model_name == 'AttentionDeLELSTM':
+                model = AttentionDeLELSTM(config.config(model_name, args), short).to(device)
             elif model_name == 'IMV_full':
                 model = IMVFullLSTM_pertime(config.config(model_name, args),short).to(device)
 

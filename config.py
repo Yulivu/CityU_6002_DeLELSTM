@@ -10,6 +10,26 @@ def config_elec(model_name, args):
 
     if model_name in ['Delelstm']:
         params['N_units'] = args.N_units
+    elif model_name in ['AttentionDeLELSTM', 'DeLELSTM_AttnNoDecomp']:
+        params['N_units'] = args.N_units
+        n_units = params['n_units']
+        if hasattr(args, 'attention_heads') and args.attention_heads is not None:
+            params['attention_heads'] = int(args.attention_heads)
+        else:
+            if n_units % 4 == 0:
+                params['attention_heads'] = 4
+            elif n_units % 2 == 0:
+                params['attention_heads'] = 2
+            else:
+                params['attention_heads'] = 1
+        if hasattr(args, 'attention_threshold') and args.attention_threshold is not None:
+            params['attention_threshold'] = float(args.attention_threshold)
+        else:
+            params['attention_threshold'] = 0.05
+        if hasattr(args, 'ridge_lambda') and args.ridge_lambda is not None:
+            params['ridge_lambda'] = float(args.ridge_lambda)
+        else:
+            params['ridge_lambda'] = 1e-3
 
     elif model_name == 'IMV_full':
             params['n_units']=16
@@ -43,6 +63,26 @@ def config_pm(model_name, args):
 
     if model_name in ['Delelstm']:
         params['N_units'] = args.N_units
+    elif model_name in ['AttentionDeLELSTM', 'DeLELSTM_AttnNoDecomp']:
+        params['N_units'] = args.N_units
+        n_units = params['n_units']
+        if hasattr(args, 'attention_heads') and args.attention_heads is not None:
+            params['attention_heads'] = int(args.attention_heads)
+        else:
+            if n_units % 4 == 0:
+                params['attention_heads'] = 4
+            elif n_units % 2 == 0:
+                params['attention_heads'] = 2
+            else:
+                params['attention_heads'] = 1
+        if hasattr(args, 'attention_threshold') and args.attention_threshold is not None:
+            params['attention_threshold'] = float(args.attention_threshold)
+        else:
+            params['attention_threshold'] = 0.05
+        if hasattr(args, 'ridge_lambda') and args.ridge_lambda is not None:
+            params['ridge_lambda'] = float(args.ridge_lambda)
+        else:
+            params['ridge_lambda'] = 1e-3
 
     elif model_name == 'IMV_full':
             params['n_units']=16
@@ -77,6 +117,26 @@ def config_exchange(model_name, args):
 
     if model_name in ['Delelstm']:
         params['N_units'] = args.N_units
+    elif model_name in ['AttentionDeLELSTM', 'DeLELSTM_AttnNoDecomp']:
+        params['N_units'] = args.N_units
+        n_units = params['n_units']
+        if hasattr(args, 'attention_heads') and args.attention_heads is not None:
+            params['attention_heads'] = int(args.attention_heads)
+        else:
+            if n_units % 4 == 0:
+                params['attention_heads'] = 4
+            elif n_units % 2 == 0:
+                params['attention_heads'] = 2
+            else:
+                params['attention_heads'] = 1
+        if hasattr(args, 'attention_threshold') and args.attention_threshold is not None:
+            params['attention_threshold'] = float(args.attention_threshold)
+        else:
+            params['attention_threshold'] = 0.05
+        if hasattr(args, 'ridge_lambda') and args.ridge_lambda is not None:
+            params['ridge_lambda'] = float(args.ridge_lambda)
+        else:
+            params['ridge_lambda'] = 1e-3
 
     elif model_name == 'IMV_full':
             params['n_units']=16

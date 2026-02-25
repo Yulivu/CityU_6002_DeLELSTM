@@ -10,13 +10,13 @@ import warnings
 warnings.filterwarnings('ignore')
 
 def elec_training(model, model_name, train_loader, val_loader, test_loader, args, device, exp_id):
-    opt = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=0.001)
+    opt = torch.optim.Adam(model.parameters(), lr=0.01)
     try:
         epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
     except TypeError:
         epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, min_lr=0.0001)
 
-    epochs = args.epochs if hasattr(args, 'epochs') and args.epochs is not None else 350
+    epochs = args.epochs if hasattr(args, 'epochs') and args.epochs is not None else 300
     min_val_loss = 1000000
     loss=nn.MSELoss()
 
@@ -40,17 +40,18 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
                 j += 1
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device) #shape batch, depth
+                if hasattr(model, 'short') and model.short > 0:
+                    batch_y = batch_y[:, model.short:]
                 opt.zero_grad()
-
-                y_pred, unorm_weight,_= model(batch_x.float(), device)
-                y_pred = y_pred.squeeze(-1)
+                out = model(batch_x.float(), device)
+                y_pred = out[0].squeeze(-1)
 
                 l = loss(y_pred, batch_y)
                 l.backward()
                 mse_train += l.item()
                 opt.step()
         time_elapsed = time.time() - epoch_start_time
-        print( f"Training loss at epoch {i}: mse={mse_train/j:.4f}, rmse={(mse_train / (j)) ** 0.5:.4f}, "
+        print( f"Training loss at epoch {i}: mse={mse_train/j:.8f}, rmse={(mse_train / (j)) ** 0.5:.8f}, "
                f"time elapsed: {time_elapsed:.2f}")
         if args.log:
             df_log_val.loc[i, 'Epoch'] = i
@@ -65,27 +66,35 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
             true = []
             val_alpha=[]
             val_beta=[]
+            val_gamma = []
+            val_alpha_t = []
+            val_beta_t = []
+            val_gamma_t = []
             valweight_list = torch.jit.annotate(list[Tensor], [])
             for batch_x, batch_y in val_loader:
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device)
-                output, unorm_weight,_ = model(batch_x.float(),device)
-
-                output = output.squeeze(-1)
+                if hasattr(model, 'short') and model.short > 0:
+                    batch_y = batch_y[:, model.short:]
+                out = model(batch_x.float(), device)
+                output = out[0].squeeze(-1)
                 preds.append(output.detach().cpu().numpy())
                 true.append(batch_y.detach().cpu().numpy())
                 if model_name in ['IMV_full','IMV_tensor']:
-                    val_alpha.append(unorm_weight.detach().cpu().numpy())
-                    val_beta.append(_.detach().cpu().numpy())
+                    val_alpha.append(out[1].detach().cpu().numpy())
+                    val_beta.append(out[2].detach().cpu().numpy())
                 if model_name in ['Delelstm']:
-                    unorm = unorm_weight.squeeze(-1)  # shape time depth, batch, feature
+                    unorm = out[1].squeeze(-1)  # shape time depth, batch, feature
                     valweight_list += [unorm]
                 if model_name in ['Retain']:
-                    valweight_list += [unorm_weight]
+                    valweight_list += [out[1]]
+                if model_name in ['AttentionDeLELSTM']:
+                    val_alpha_t.append(out[1].detach().cpu().permute(1, 0, 2))
+                    val_beta_t.append(out[2].detach().cpu().permute(1, 0, 2))
+                    val_gamma_t.append(out[3].detach().cpu().permute(1, 0, 2, 3))
         if model_name in ['Delelstm']:
-            valweight = torch.stack(valweight_list)
-            valweight = valweight.permute(0, 2, 1, 3).reshape(-1, args.depth - 2, args.input_dim * 2)
-            valweight = valweight.mean(dim=0, keepdim=False).detach().cpu().numpy()
+            valweight = torch.cat(valweight_list, dim=1)
+            valweight = valweight.mean(dim=1, keepdim=False).detach().cpu().numpy()
             valweight = pd.DataFrame(valweight)
         if model_name in ['IMV_full', 'IMV_tensor']:
             val_alpha = np.concatenate(val_alpha)
@@ -94,9 +103,15 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
             val_beta = val_beta.mean(axis=0)
             val_beta = pd.DataFrame(val_beta)
             val_alpha = pd.DataFrame(val_alpha)
+        if model_name in ['AttentionDeLELSTM']:
+            val_alpha = torch.cat(val_alpha_t, dim=0).mean(dim=0).numpy()
+            val_beta = torch.cat(val_beta_t, dim=0).mean(dim=0).numpy()
+            val_gamma = torch.cat(val_gamma_t, dim=0).mean(dim=0).numpy()
+            val_alpha = pd.DataFrame(val_alpha)
+            val_beta = pd.DataFrame(val_beta)
+            val_gamma = pd.DataFrame(val_gamma.reshape(val_gamma.shape[0], -1))
         if model_name in ['Retain']:
-            valweight = torch.stack(valweight_list)
-            valweight = valweight.reshape(-1, args.depth - 2, args.input_dim)
+            valweight = torch.cat(valweight_list, dim=0)
             valweight = valweight.mean(dim=0, keepdim=False).detach().cpu().numpy()
             valweight = pd.DataFrame(valweight)
         preds = np.concatenate(preds)
@@ -116,6 +131,10 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
             if model_name in ['IMV_full', 'IMV_tensor']:
                 val_alpha.to_csv(os.path.join(model_save_path, str(exp_id) + '_valalpha.csv'))
                 val_beta.to_csv(os.path.join(model_save_path,str(exp_id) + '_valbeta.csv'))
+            if model_name in ['AttentionDeLELSTM']:
+                val_alpha.to_csv(os.path.join(model_save_path, str(exp_id) + '_valalpha.csv'))
+                val_beta.to_csv(os.path.join(model_save_path, str(exp_id) + '_valbeta.csv'))
+                val_gamma.to_csv(os.path.join(model_save_path, str(exp_id) + '_valgamma.csv'))
             if model_name=='Delelstm':
                 valweight.to_csv(os.path.join(model_save_path, str(exp_id) + '_valweight.csv'))
                 soft_valweight = valweight.copy()
@@ -148,23 +167,32 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
         true = []
         test_alpha=[]
         test_beta=[]
+        test_alpha_t = []
+        test_beta_t = []
+        test_gamma_t = []
         unorm_list = torch.jit.annotate(list[Tensor], [])
         for batch_x, batch_y in test_loader:
             batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
-            output, unorm_weight,_ = model(batch_x.float(), device)  # unorm time, batch, features
-            output = output.squeeze(-1)
+            if hasattr(model, 'short') and model.short > 0:
+                batch_y = batch_y[:, model.short:]
+            out = model(batch_x.float(), device)
+            output = out[0].squeeze(-1)
             preds.append(output.detach().cpu().numpy())
             true.append(batch_y.detach().cpu().numpy())
             if model_name in ['IMV_full', 'IMV_tensor']:
-                test_alpha.append(unorm_weight.detach().cpu().numpy())
-                test_beta.append(_.detach().cpu().numpy())
+                test_alpha.append(out[1].detach().cpu().numpy())
+                test_beta.append(out[2].detach().cpu().numpy())
             if model_name in ['Delelstm']:
-                unorm = unorm_weight.squeeze(-1)  # shape time depth, batch, feature
+                unorm = out[1].squeeze(-1)  # shape time depth, batch, feature
                 unorm_list += [unorm]
             if model_name in ['Retain']:
                 # shape time depth, batch, feature
-                unorm_list += [unorm_weight]
+                unorm_list += [out[1]]
+            if model_name in ['AttentionDeLELSTM']:
+                test_alpha_t.append(out[1].detach().cpu().permute(1, 0, 2))
+                test_beta_t.append(out[2].detach().cpu().permute(1, 0, 2))
+                test_gamma_t.append(out[3].detach().cpu().permute(1, 0, 2, 3))
 
 
     preds = np.concatenate(preds)
@@ -172,15 +200,13 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
     newpred=torch.tensor(preds)
     newtrue=torch.tensor(true)
     if model_name in ['Retain']:
-        test_weight = torch.stack(unorm_list)  # shape 19, 5, 100, 5
-        test_weight = test_weight.reshape(-1, args.depth - 2, args.input_dim)
-        test_weight = test_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()  # shape time, feature
+        test_weight = torch.cat(unorm_list, dim=0)
+        test_weight = test_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()
         test_weight = pd.DataFrame(test_weight)
         test_weight.to_csv(os.path.join(model_save_path,str(exp_id) + '_Explain_test_weight.csv'))
     if model_name in ['Delelstm']:
-        unorm_weight = torch.stack(unorm_list)  # shape 19, 5, 100, 5
-        unorm_weight = unorm_weight.permute(0, 2, 1, 3).reshape(-1, args.depth - 2, args.input_dim * 2)
-        unorm_weight = unorm_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()  # shape time, feature
+        unorm_weight = torch.cat(unorm_list, dim=1)
+        unorm_weight = unorm_weight.mean(dim=1, keepdim=False).detach().cpu().numpy()
         unorm_weight = pd.DataFrame(unorm_weight)
         unorm_weight.to_csv(os.path.join(model_save_path, str(exp_id) + '_Explain_test_weight.csv'))
         soft_testweight = unorm_weight.copy()
@@ -198,6 +224,13 @@ def elec_training(model, model_name, train_loader, val_loader, test_loader, args
         test_alpha = pd.DataFrame(test_alpha)
         test_alpha.to_csv(os.path.join(model_save_path,str(exp_id) + '_testalpha.csv'))
         test_beta.to_csv(os.path.join(model_save_path,str(exp_id) + '_testbeta.csv'))
+    if model_name in ['AttentionDeLELSTM']:
+        test_alpha = torch.cat(test_alpha_t, dim=0).mean(dim=0).numpy()
+        test_beta = torch.cat(test_beta_t, dim=0).mean(dim=0).numpy()
+        test_gamma = torch.cat(test_gamma_t, dim=0).mean(dim=0).numpy()
+        pd.DataFrame(test_alpha).to_csv(os.path.join(model_save_path, str(exp_id) + '_testalpha.csv'))
+        pd.DataFrame(test_beta).to_csv(os.path.join(model_save_path, str(exp_id) + '_testbeta.csv'))
+        pd.DataFrame(test_gamma.reshape(test_gamma.shape[0], -1)).to_csv(os.path.join(model_save_path, str(exp_id) + '_testgamma.csv'))
 
     mse_test = mean_squared_error(true, preds)
     mae_test = mean_absolute_error(true, preds)
@@ -250,17 +283,18 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
                 j += 1
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device) #shape batch, depth
+                if hasattr(model, 'short') and model.short > 0:
+                    batch_y = batch_y[:, model.short:]
                 opt.zero_grad()
-
-                y_pred, unorm_weight,_= model(batch_x.float(), device)
-                y_pred = y_pred.squeeze(-1)
+                out = model(batch_x.float(), device)
+                y_pred = out[0].squeeze(-1)
 
                 l = loss(y_pred, batch_y)
                 l.backward()
                 mse_train += l.item()
                 opt.step()
         time_elapsed = time.time() - epoch_start_time
-        print( f"Training loss at epoch {i}: mse={mse_train/j:.4f}, rmse={(mse_train / (j)) ** 0.5:.4f}, "
+        print( f"Training loss at epoch {i}: mse={mse_train/j:.8f}, rmse={(mse_train / (j)) ** 0.5:.8f}, "
                f"time elapsed: {time_elapsed:.2f}")
         if args.log:
             df_log_val.loc[i, 'Epoch'] = i
@@ -275,27 +309,35 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
             true = []
             val_alpha=[]
             val_beta=[]
+            val_gamma = []
+            val_alpha_t = []
+            val_beta_t = []
+            val_gamma_t = []
             valweight_list = torch.jit.annotate(list[Tensor], [])
             for batch_x, batch_y in val_loader:
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device)
-                output, unorm_weight,_ = model(batch_x.float(),device)
-
-                output = output.squeeze(-1)
+                if hasattr(model, 'short') and model.short > 0:
+                    batch_y = batch_y[:, model.short:]
+                out = model(batch_x.float(), device)
+                output = out[0].squeeze(-1)
                 preds.append(output.detach().cpu().numpy())
                 true.append(batch_y.detach().cpu().numpy())
                 if model_name in ['IMV_full','IMV_tensor']:
-                    val_alpha.append(unorm_weight.detach().cpu().numpy())
-                    val_beta.append(_.detach().cpu().numpy())
+                    val_alpha.append(out[1].detach().cpu().numpy())
+                    val_beta.append(out[2].detach().cpu().numpy())
                 if model_name in ['Delelstm']:
-                    unorm = unorm_weight.squeeze(-1)  # shape time depth, batch, feature
+                    unorm = out[1].squeeze(-1)  # shape time depth, batch, feature
                     valweight_list += [unorm]
                 if model_name in ['Retain']:
-                    valweight_list += [unorm_weight]
+                    valweight_list += [out[1]]
+                if model_name in ['AttentionDeLELSTM']:
+                    val_alpha_t.append(out[1].detach().cpu().permute(1, 0, 2))
+                    val_beta_t.append(out[2].detach().cpu().permute(1, 0, 2))
+                    val_gamma_t.append(out[3].detach().cpu().permute(1, 0, 2, 3))
         if model_name in ['Delelstm']:
-            valweight = torch.stack(valweight_list)
-            valweight = valweight.permute(0, 2, 1, 3).reshape(-1, args.depth - 2, args.input_dim * 2)
-            valweight = valweight.mean(dim=0, keepdim=False).detach().cpu().numpy()
+            valweight = torch.cat(valweight_list, dim=1)
+            valweight = valweight.mean(dim=1, keepdim=False).detach().cpu().numpy()
             valweight = pd.DataFrame(valweight)
         if model_name in ['IMV_full', 'IMV_tensor']:
             val_alpha = np.concatenate(val_alpha)
@@ -304,9 +346,15 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
             val_beta = val_beta.mean(axis=0)
             val_beta = pd.DataFrame(val_beta)
             val_alpha = pd.DataFrame(val_alpha)
+        if model_name in ['AttentionDeLELSTM']:
+            val_alpha = torch.cat(val_alpha_t, dim=0).mean(dim=0).numpy()
+            val_beta = torch.cat(val_beta_t, dim=0).mean(dim=0).numpy()
+            val_gamma = torch.cat(val_gamma_t, dim=0).mean(dim=0).numpy()
+            val_alpha = pd.DataFrame(val_alpha)
+            val_beta = pd.DataFrame(val_beta)
+            val_gamma = pd.DataFrame(val_gamma.reshape(val_gamma.shape[0], -1))
         if model_name in ['Retain']:
-            valweight = torch.stack(valweight_list)
-            valweight = valweight.reshape(-1, args.depth - 2, args.input_dim)
+            valweight = torch.cat(valweight_list, dim=0)
             valweight = valweight.mean(dim=0, keepdim=False).detach().cpu().numpy()
             valweight = pd.DataFrame(valweight)
         preds = np.concatenate(preds)
@@ -326,6 +374,10 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
             if model_name in ['IMV_full', 'IMV_tensor']:
                 val_alpha.to_csv(os.path.join(model_save_path, str(exp_id) + '_valalpha.csv'))
                 val_beta.to_csv(os.path.join(model_save_path,str(exp_id) + '_valbeta.csv'))
+            if model_name in ['AttentionDeLELSTM']:
+                val_alpha.to_csv(os.path.join(model_save_path, str(exp_id) + '_valalpha.csv'))
+                val_beta.to_csv(os.path.join(model_save_path, str(exp_id) + '_valbeta.csv'))
+                val_gamma.to_csv(os.path.join(model_save_path, str(exp_id) + '_valgamma.csv'))
             if model_name=='Delelstm':
                 valweight.to_csv(os.path.join(model_save_path, str(exp_id) + '_valweight.csv'))
                 soft_valweight = valweight.copy()
@@ -358,23 +410,32 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
         true = []
         test_alpha=[]
         test_beta=[]
+        test_alpha_t = []
+        test_beta_t = []
+        test_gamma_t = []
         unorm_list = torch.jit.annotate(list[Tensor], [])
         for batch_x, batch_y in test_loader:
             batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
-            output, unorm_weight,_ = model(batch_x.float(), device)  # unorm time, batch, features
-            output = output.squeeze(-1)
+            if hasattr(model, 'short') and model.short > 0:
+                batch_y = batch_y[:, model.short:]
+            out = model(batch_x.float(), device)
+            output = out[0].squeeze(-1)
             preds.append(output.detach().cpu().numpy())
             true.append(batch_y.detach().cpu().numpy())
             if model_name in ['IMV_full', 'IMV_tensor']:
-                test_alpha.append(unorm_weight.detach().cpu().numpy())
-                test_beta.append(_.detach().cpu().numpy())
+                test_alpha.append(out[1].detach().cpu().numpy())
+                test_beta.append(out[2].detach().cpu().numpy())
             if model_name in ['Delelstm']:
-                unorm = unorm_weight.squeeze(-1)  # shape time depth, batch, feature
+                unorm = out[1].squeeze(-1)  # shape time depth, batch, feature
                 unorm_list += [unorm]
             if model_name in ['Retain']:
                 # shape time depth, batch, feature
-                unorm_list += [unorm_weight]
+                unorm_list += [out[1]]
+            if model_name in ['AttentionDeLELSTM']:
+                test_alpha_t.append(out[1].detach().cpu().permute(1, 0, 2))
+                test_beta_t.append(out[2].detach().cpu().permute(1, 0, 2))
+                test_gamma_t.append(out[3].detach().cpu().permute(1, 0, 2, 3))
 
 
     preds = np.concatenate(preds)
@@ -382,15 +443,13 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
     newpred=torch.tensor(preds)
     newtrue=torch.tensor(true)
     if model_name in ['Retain']:
-        test_weight = torch.stack(unorm_list)  # shape 19, 5, 100, 5
-        test_weight = test_weight.reshape(-1, args.depth - 2, args.input_dim)
-        test_weight = test_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()  # shape time, feature
+        test_weight = torch.cat(unorm_list, dim=0)
+        test_weight = test_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()
         test_weight = pd.DataFrame(test_weight)
         test_weight.to_csv(os.path.join(model_save_path,str(exp_id) + '_Explain_test_weight.csv'))
     if model_name in ['Delelstm']:
-        unorm_weight = torch.stack(unorm_list)  # shape 19, 5, 100, 5
-        unorm_weight = unorm_weight.permute(0, 2, 1, 3).reshape(-1, args.depth - 2, args.input_dim * 2)
-        unorm_weight = unorm_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()  # shape time, feature
+        unorm_weight = torch.cat(unorm_list, dim=1)
+        unorm_weight = unorm_weight.mean(dim=1, keepdim=False).detach().cpu().numpy()
         unorm_weight = pd.DataFrame(unorm_weight)
         unorm_weight.to_csv(os.path.join(model_save_path, str(exp_id) + '_Explain_test_weight.csv'))
         soft_testweight = unorm_weight.copy()
@@ -408,6 +467,13 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
         test_alpha = pd.DataFrame(test_alpha)
         test_alpha.to_csv(os.path.join(model_save_path,str(exp_id) + '_testalpha.csv'))
         test_beta.to_csv(os.path.join(model_save_path,str(exp_id) + '_testbeta.csv'))
+    if model_name in ['AttentionDeLELSTM']:
+        test_alpha = torch.cat(test_alpha_t, dim=0).mean(dim=0).numpy()
+        test_beta = torch.cat(test_beta_t, dim=0).mean(dim=0).numpy()
+        test_gamma = torch.cat(test_gamma_t, dim=0).mean(dim=0).numpy()
+        pd.DataFrame(test_alpha).to_csv(os.path.join(model_save_path, str(exp_id) + '_testalpha.csv'))
+        pd.DataFrame(test_beta).to_csv(os.path.join(model_save_path, str(exp_id) + '_testbeta.csv'))
+        pd.DataFrame(test_gamma.reshape(test_gamma.shape[0], -1)).to_csv(os.path.join(model_save_path, str(exp_id) + '_testgamma.csv'))
 
     mse_test = mean_squared_error(true, preds)
     mae_test = mean_absolute_error(true, preds)
@@ -429,7 +495,7 @@ def exchange_training(model, model_name, train_loader, val_loader, test_loader, 
 
 def PM_training(model, model_name, train_loader, val_loader, test_loader, args, device, exp_id):
     #opt = torch.optim.Adam(model.parameters(), lr=0.05, weight_decay=0.03)
-    opt = torch.optim.Adam(model.parameters(), lr=0.05,weight_decay=0.03)
+    opt = torch.optim.Adam(model.parameters(), lr=0.05)
     try:
         epoch_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20, verbose=True, min_lr=0.0001)
     except TypeError:
@@ -443,6 +509,10 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
     save_path = os.path.join(args.save_dirs, 'newrevision_pmc', 'exp_' + str(exp_id))
     if not os.path.exists(save_path):
         os.makedirs(save_path)
+
+    model_save_path = os.path.join(save_path, model_name)
+    if not os.path.exists(model_save_path):
+        os.makedirs(model_save_path)
 
     if args.log:
         df_log_val = pd.DataFrame()
@@ -460,22 +530,27 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
                 j += 1
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device) #shape batch, depth
+                if hasattr(model, 'short') and model.short > 0:
+                    batch_y = batch_y[:, model.short:]
                 opt.zero_grad()
-
-                y_pred, unorm_weight,_= model(batch_x.float(), device)
-                y_pred = y_pred.squeeze(-1)
+                out = model(batch_x.float(), device)
+                y_pred = out[0].squeeze(-1)
 
                 l = loss(y_pred, batch_y)
                 l.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
                 mse_train += l.item()
                 opt.step()
         time_elapsed = time.time() - epoch_start_time
-        print( f"Training loss at epoch {i}: mse={mse_train/j:.4f}, rmse={(mse_train / (j)) ** 0.5:.4f}, "
-               f"time elapsed: {time_elapsed:.2f}")
+        train_mse = mse_train / (j)
+        train_rmse = (train_mse) ** 0.5
+        print(f"Training loss at epoch {i}: mse={train_mse:.4f}, rmse={train_rmse:.4f}, time elapsed: {time_elapsed:.2f}")
+        if not np.isfinite(train_mse) or not np.isfinite(train_rmse):
+            break
         if args.log:
             df_log_val.loc[i, 'Epoch'] = i
-            df_log_val.loc[i, 'Train MSE'] = mse_train / (j)
-            df_log_val.loc[i, 'Train RMSE'] = (mse_train / (j)) ** 0.5
+            df_log_val.loc[i, 'Train MSE'] = train_mse
+            df_log_val.loc[i, 'Train RMSE'] = train_rmse
 
 
         '''Model validation'''
@@ -485,27 +560,35 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
             true = []
             val_alpha=[]
             val_beta=[]
+            val_gamma = []
+            val_alpha_t = []
+            val_beta_t = []
+            val_gamma_t = []
             valweight_list = torch.jit.annotate(list[Tensor], [])
             for batch_x, batch_y in val_loader:
                 batch_x = batch_x.to(device)
                 batch_y = batch_y.to(device)
-                output, unorm_weight,_ = model(batch_x.float(),device)
-
-                output = output.squeeze(-1)
+                if hasattr(model, 'short') and model.short > 0:
+                    batch_y = batch_y[:, model.short:]
+                out = model(batch_x.float(), device)
+                output = out[0].squeeze(-1)
                 preds.append(output.detach().cpu().numpy())
                 true.append(batch_y.detach().cpu().numpy())
                 if model_name in ['IMV_full','IMV_tensor']:
-                    val_alpha.append(unorm_weight.detach().cpu().numpy())
-                    val_beta.append(_.detach().cpu().numpy())
+                    val_alpha.append(out[1].detach().cpu().numpy())
+                    val_beta.append(out[2].detach().cpu().numpy())
                 if model_name in ['Delelstm']:
-                    unorm = unorm_weight.squeeze(-1)  # shape time depth, batch, feature
+                    unorm = out[1].squeeze(-1)  # shape time depth, batch, feature
                     valweight_list += [unorm]
                 if model_name in ['Retain']:
-                    valweight_list += [unorm_weight]
+                    valweight_list += [out[1]]
+                if model_name in ['AttentionDeLELSTM']:
+                    val_alpha_t.append(out[1].detach().cpu().permute(1, 0, 2))
+                    val_beta_t.append(out[2].detach().cpu().permute(1, 0, 2))
+                    val_gamma_t.append(out[3].detach().cpu().permute(1, 0, 2, 3))
         if model_name in ['Delelstm']:
-            valweight = torch.stack(valweight_list)
-            valweight = valweight.permute(0, 2, 1, 3).reshape(-1, args.depth - 2, args.input_dim * 2)
-            valweight = valweight.mean(dim=0, keepdim=False).detach().cpu().numpy()
+            valweight = torch.cat(valweight_list, dim=1)
+            valweight = valweight.mean(dim=1, keepdim=False).detach().cpu().numpy()
             valweight = pd.DataFrame(valweight)
         if model_name in ['IMV_full', 'IMV_tensor']:
             val_alpha = np.concatenate(val_alpha)
@@ -514,13 +597,21 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
             val_beta = val_beta.mean(axis=0)
             val_beta = pd.DataFrame(val_beta)
             val_alpha = pd.DataFrame(val_alpha)
+        if model_name in ['AttentionDeLELSTM']:
+            val_alpha = torch.cat(val_alpha_t, dim=0).mean(dim=0).numpy()
+            val_beta = torch.cat(val_beta_t, dim=0).mean(dim=0).numpy()
+            val_gamma = torch.cat(val_gamma_t, dim=0).mean(dim=0).numpy()
+            val_alpha = pd.DataFrame(val_alpha)
+            val_beta = pd.DataFrame(val_beta)
+            val_gamma = pd.DataFrame(val_gamma.reshape(val_gamma.shape[0], -1))
         if model_name in ['Retain']:
-            valweight = torch.stack(valweight_list)
-            valweight = valweight.reshape(-1, args.depth - 2, args.input_dim)
+            valweight = torch.cat(valweight_list, dim=0)
             valweight = valweight.mean(dim=0, keepdim=False).detach().cpu().numpy()
             valweight = pd.DataFrame(valweight)
         preds = np.concatenate(preds)
         true = np.concatenate(true)
+        if not np.isfinite(preds).all() or not np.isfinite(true).all():
+            break
         mse_val = mean_squared_error(true, preds)
         mae_val = mean_absolute_error(true, preds)
 
@@ -528,14 +619,15 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
         if min_val_loss > mse_val ** 0.5:
             min_val_loss = mse_val ** 0.5
             print("Saving...")
-            model_save_path = os.path.join(save_path, model_name)
-            if not os.path.exists(model_save_path):
-                os.makedirs(model_save_path)
             torch.save(model.state_dict(), os.path.join(model_save_path,str(exp_id)+'_pm_predict.pt'))
 
             if model_name in ['IMV_full', 'IMV_tensor']:
                 val_alpha.to_csv(os.path.join(model_save_path, str(exp_id) + '_valalpha.csv'))
                 val_beta.to_csv(os.path.join(model_save_path,str(exp_id) + '_valbeta.csv'))
+            if model_name in ['AttentionDeLELSTM']:
+                val_alpha.to_csv(os.path.join(model_save_path, str(exp_id) + '_valalpha.csv'))
+                val_beta.to_csv(os.path.join(model_save_path, str(exp_id) + '_valbeta.csv'))
+                val_gamma.to_csv(os.path.join(model_save_path, str(exp_id) + '_valgamma.csv'))
             if model_name=='Delelstm':
                 valweight.to_csv(os.path.join(model_save_path, str(exp_id) + '_valweight.csv'))
                 soft_valweight = valweight.copy()
@@ -567,23 +659,32 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
         true = []
         test_alpha=[]
         test_beta=[]
+        test_alpha_t = []
+        test_beta_t = []
+        test_gamma_t = []
         unorm_list = torch.jit.annotate(list[Tensor], [])
         for batch_x, batch_y in test_loader:
             batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
-            output, unorm_weight,_ = model(batch_x.float(), device)  # unorm time, batch, features
-            output = output.squeeze(-1)
+            if hasattr(model, 'short') and model.short > 0:
+                batch_y = batch_y[:, model.short:]
+            out = model(batch_x.float(), device)
+            output = out[0].squeeze(-1)
             preds.append(output.detach().cpu().numpy())
             true.append(batch_y.detach().cpu().numpy())
             if model_name in ['IMV_full', 'IMV_tensor']:
-                test_alpha.append(unorm_weight.detach().cpu().numpy())
-                test_beta.append(_.detach().cpu().numpy())
+                test_alpha.append(out[1].detach().cpu().numpy())
+                test_beta.append(out[2].detach().cpu().numpy())
             if model_name in ['Delelstm']:
-                unorm = unorm_weight.squeeze(-1)  # shape time depth, batch, feature
+                unorm = out[1].squeeze(-1)  # shape time depth, batch, feature
                 unorm_list += [unorm]
             if model_name in ['Retain']:
                 # shape time depth, batch, feature
-                unorm_list += [unorm_weight]
+                unorm_list += [out[1]]
+            if model_name in ['AttentionDeLELSTM']:
+                test_alpha_t.append(out[1].detach().cpu().permute(1, 0, 2))
+                test_beta_t.append(out[2].detach().cpu().permute(1, 0, 2))
+                test_gamma_t.append(out[3].detach().cpu().permute(1, 0, 2, 3))
 
 
     preds = np.concatenate(preds)
@@ -591,15 +692,13 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
     newpred=torch.tensor(preds)
     newtrue=torch.tensor(true)
     if model_name in ['Retain']:
-        test_weight = torch.stack(unorm_list)  # shape 19, 5, 100, 5
-        test_weight = test_weight.reshape(-1, args.depth - 2, args.input_dim)
-        test_weight = test_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()  # shape time, feature
+        test_weight = torch.cat(unorm_list, dim=0)
+        test_weight = test_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()
         test_weight = pd.DataFrame(test_weight)
         test_weight.to_csv(os.path.join(model_save_path,str(exp_id) + '_Explain_test_weight.csv'))
     if model_name in ['Delelstm']:
-        unorm_weight = torch.stack(unorm_list)  # shape 19, 5, 100, 5
-        unorm_weight = unorm_weight.permute(0, 2, 1, 3).reshape(-1, args.depth - 2, args.input_dim * 2)
-        unorm_weight = unorm_weight.mean(dim=0, keepdim=False).detach().cpu().numpy()  # shape time, feature
+        unorm_weight = torch.cat(unorm_list, dim=1)
+        unorm_weight = unorm_weight.mean(dim=1, keepdim=False).detach().cpu().numpy()
         unorm_weight = pd.DataFrame(unorm_weight)
         unorm_weight.to_csv(os.path.join(model_save_path, str(exp_id) + '_Explain_test_weight.csv'))
         soft_testweight = unorm_weight.copy()
@@ -617,6 +716,13 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
         test_alpha = pd.DataFrame(test_alpha)
         test_alpha.to_csv(os.path.join(model_save_path,str(exp_id) + '_testalpha.csv'))
         test_beta.to_csv(os.path.join(model_save_path,str(exp_id) + '_testbeta.csv'))
+    if model_name in ['AttentionDeLELSTM']:
+        test_alpha = torch.cat(test_alpha_t, dim=0).mean(dim=0).numpy()
+        test_beta = torch.cat(test_beta_t, dim=0).mean(dim=0).numpy()
+        test_gamma = torch.cat(test_gamma_t, dim=0).mean(dim=0).numpy()
+        pd.DataFrame(test_alpha).to_csv(os.path.join(model_save_path, str(exp_id) + '_testalpha.csv'))
+        pd.DataFrame(test_beta).to_csv(os.path.join(model_save_path, str(exp_id) + '_testbeta.csv'))
+        pd.DataFrame(test_gamma.reshape(test_gamma.shape[0], -1)).to_csv(os.path.join(model_save_path, str(exp_id) + '_testgamma.csv'))
 
     mse_test = mean_squared_error(true, preds)
     mae_test = mean_absolute_error(true, preds)
@@ -635,4 +741,3 @@ def PM_training(model, model_name, train_loader, val_loader, test_loader, args, 
     outcome.to_csv(os.path.join(model_save_path, str(exp_id) + '_Explain_outcome.csv'))
     df_log_val.to_csv(os.path.join(model_save_path,str(exp_id) + '_Expalin_train_results.csv'))
     df_log_test.to_csv(os.path.join(model_save_path, str(exp_id) + '_Explain_test_results.csv'))
-

@@ -1,0 +1,5 @@
+model,group,rmse,mae
+DeLELSTM,A_with_interaction,42.61275112,20.70360947
+DeLELSTM,B_no_interaction,38.72648291,33.61581421
+AttentionDeLELSTM,A_with_interaction,38.1751815,17.09671593
+AttentionDeLELSTM,B_no_interaction,43.17304841,36.95335388

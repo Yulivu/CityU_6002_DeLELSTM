@@ -1,0 +1,128 @@
+运行指南（CityU_6002_DeLELSTM）
+
+1) GPU 运行（你是 5070Ti 笔记本）
+
+1.1 先自检 PyTorch 是否识别 CUDA
+
+python -c "import torch; print('cuda_available=', torch.cuda.is_available()); print('cuda_version=', torch.version.cuda); print('device_count=', torch.cuda.device_count()); print('device0=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)"
+
+如果 cuda_available=False，说明当前 Python 环境里的 PyTorch 不是 CUDA 版本（或驱动/CUDA 运行时不匹配），需要安装对应 CUDA 的 PyTorch。
+
+1.1.1 5070Ti（Blackwell / sm_120）特别说明
+
+即使 cuda_available=True，如果出现类似提示：
+"... CUDA capability sm_120 is not compatible with the current PyTorch installation"
+
+说明你装的是“带 CUDA 的 PyTorch”，但该版本没有编译 sm_120，需要改装支持 Blackwell 的 PyTorch（通常是 nightly + CUDA 12.8）。
+
+推荐安装方式（只装 torch 即可，本项目不依赖 torchvision/torchaudio）：
+
+python -m pip uninstall -y torch
+python -m pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu128 torch
+
+安装后验证（应当能看到 arch 列表包含 sm_120）：
+
+python -c "import torch; print(torch.__version__); print('cuda', torch.version.cuda); print('arch', torch.cuda.get_arch_list()); print(torch.randn(2,device='cuda'))"
+
+1.2 运行脚本时指定 GPU
+
+--device cuda
+或
+--device cuda:0
+
+所有脚本都支持 --device（Electricity.py / PM.py / Exchange.py / tune_attention_delelstm_electricity.py）。
+
+
+2) 论文 supplementary 对齐的“通用设置”说明
+
+supplementary_ijcai23 的设置摘要：
+- batch size：PM=32 / Electricity=64 / Exchange=128
+- learning rate：PM=0.05 / Electricity=0.01 / Exchange=0.01
+- hidden size：PM=32 / Electricity=64 / Exchange=32
+- epochs：最多 300
+- optimizer：Adam + 自适应 lr 策略
+
+本仓库里：
+- batch/hidden 的默认值在各数据集入口脚本里（Electricity.py / PM.py / Exchange.py）。
+- learning rate 与 lr scheduler 在 model_training.py 中写死（电力&汇率 0.01，PM 0.05）。
+- Electricity 默认 epochs 已设为 300；PM/Exchange 仍默认 300。
+
+
+3) Electricity（电力）运行命令
+
+3.1 只跑 AttentionDeLELSTM（推荐：可调 attention/分解超参）
+
+python Electricity.py --models AttentionDeLELSTM --device cuda:0 --num_exp 5 --epochs 300 --batch_size 64 ^
+  --n_units 64 --N_units 64 ^
+  --attention_heads 4 --attention_threshold 0.05 --ridge_lambda 0.0001
+
+说明：
+- attention_heads 必须整除 n_units（例如 n_units=64 可用 heads=1/2/4/8/16/32/64）。
+- attention_threshold 越大越“稀疏”，会减少 gamma 交互项数量。
+- ridge_lambda 是分解时的 ridge 正则强度。
+
+3.2 跑 baseline（与论文 IMV/RETAIN/LSTM 对齐）
+
+python Electricity.py --models Delelstm,IMV_full,IMV_tensor,Retain,LSTM --device cuda:0 --num_exp 5 --epochs 300 --batch_size 64
+
+3.3 只跑单个 baseline
+
+python Electricity.py --models Retain --device cuda:0 --num_exp 5 --epochs 300 --batch_size 64
+
+3.4 快速调参（只抽取部分序列 idx，加速筛选）
+
+python Electricity.py --models AttentionDeLELSTM --device cuda:0 --num_exp 1 --epochs 10 --batch_size 64 --max_series 256 ^
+  --attention_heads 4 --attention_threshold 0.05 --ridge_lambda 0.0001 --save_dirs results_tune_quick
+
+
+4) Exchange（汇率）运行命令
+
+4.1 跑 baseline + DeLELSTM（论文设置：hidden=32，batch=128）
+
+python Exchange.py --models Delelstm,IMV_full,IMV_tensor,Retain,LSTM --device cuda:0 --num_exp 5 --epochs 300 --batch_size 128 ^
+  --n_units 32 --N_units 32
+
+4.2 只跑 AttentionDeLELSTM（注意：默认 n_units=32，因此 heads 只能取 1/2/4/8/16/32）
+
+python Exchange.py --models AttentionDeLELSTM --device cuda:0 --num_exp 5 --epochs 300 --batch_size 128 ^
+  --n_units 32 --N_units 32 ^
+  --attention_heads 4 --attention_threshold 0.05 --ridge_lambda 0.0001
+
+
+5) PM2.5 运行命令
+
+5.1 跑 baseline + DeLELSTM（论文设置：hidden=32，batch=32）
+
+python PM.py --models Delelstm,IMV_full,IMV_tensor,Retain,LSTM --device cuda:0 --num_exp 5 --epochs 300 --batch_size 32 ^
+  --n_units 32 --N_units 32
+
+5.2 只跑 AttentionDeLELSTM
+
+python PM.py --models AttentionDeLELSTM --device cuda:0 --num_exp 5 --epochs 300 --batch_size 32 ^
+  --n_units 32 --N_units 32 ^
+  --attention_heads 4 --attention_threshold 0.05 --ridge_lambda 0.0001
+
+注意：
+- PM 的结果目录由 model_training.py 决定，当前会写到：<save_dirs>/newrevision_pmc/exp_*/<ModelName>/
+
+
+6) 输出结果在哪里看
+
+以 Electricity 为例（save_dirs 默认为 results）：
+- 结果根目录：results/Electricity/exp_0/<ModelName>/
+- 训练过程日志（每 epoch 的 val/test 指标）：*_Expalin_train_results.csv / *_Explain_test_results.csv
+- 解释结果：*_valalpha.csv / *_valbeta.csv / *_valgamma.csv 以及 test 版本
+- 预测输出：*_elec_predict.pt（不同任务文件名不同）
+
+同理：
+- Exchange：results/Exchange/exp_*/
+- PM：results/newrevision_pmc/exp_*/
+
+
+7) 可选：指定自定义数据目录
+
+如果你把数据放到其他位置，可用：
+--data_dir <包含 newX_train.csv 与 second_y.csv 的目录>
+
+例：
+python Electricity.py --data_dir D:\\MyData\\Electricity --models AttentionDeLELSTM --device cuda:0
